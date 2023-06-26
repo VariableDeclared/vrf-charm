@@ -54,7 +54,8 @@ class VrfCharmCharm(ops.CharmBase):
         with open(path, "r") as fh:
             return fh.read()
 
-
+    # TODO: Dynamic unit update 
+    # TODO: Relations?
     def setup_vrfs(self, event):
         netplan = {}
 
@@ -178,11 +179,6 @@ class VrfCharmCharm(ops.CharmBase):
             + jujud_svcfile_content[m.end() :]
         )
 
-        if self.model.config['debug']:
-            open("/tmp/test.netplan.yaml", "w").write(yaml.safe_dump(netplan))
-        else:
-            open(target_netplan, "w").write(yaml.safe_dump(netplan))
-            subprocess.check_call(["sudo", "netplan", "apply"])
 
         if self.model.config['debug']:
             open("/tmp/test.svcfile.jujud.service", "w").write(modified_jujud_svcfile)
@@ -191,11 +187,20 @@ class VrfCharmCharm(ops.CharmBase):
             open(sshd_svcfile, "w").write(modified_sshd_svcfile)
             open(jujud_svcfile, "w").write(modified_jujud_svcfile)
 
+        
+        self.model.status = ops.WaitingStatus("VRFs configured. Units conmfigured, run restart-units to finish configuration.")
+
+    # TODO: Restarting automatically fails to complete, add restart-units action.
+    def restart_units(self, event):
         subprocess.check_call("sudo systemctl daemon-reload".split())
         for service in ["sshd", "jujud-\*"]:
             subprocess.check_call(f"sudo systemctl restart {service}".split())
-        
-        self.model.status = ops.ActiveStatus("VRFs configured.")
+
+        if self.model.config['debug']:
+            open("/tmp/test.netplan.yaml", "w").write(yaml.safe_dump(netplan))
+        else:
+            open(target_netplan, "w").write(yaml.safe_dump(netplan))
+            subprocess.check_call(["sudo", "netplan", "apply"])
 
 
 if __name__ == "__main__":  # pragma: nocover
