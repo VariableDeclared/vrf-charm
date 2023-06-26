@@ -1,0 +1,34 @@
+# This file defines charm config options, and populates the Configure tab on Charmhub.
+# If your charm does not require configuration options, delete this file entirely.
+#
+# See https://juju.is/docs/config for guidance.
+
+options:
+  # An example config option to customise the log level of the workload
+  log-level:
+    description: |
+      Configures the log level of gunicorn. 
+
+      Acceptable values are: "info", "debug", "warning", "error" and "critical"
+    default: "info"
+    type: string
+  systemd-units:
+    description: |
+      Systemd Units to attempt VRF correction on. Tested on jujud, sshd, snapd.
+    default: "[jujud,sshd,snapd]"
+    type: string
+  debug:
+    description: |
+      Debug mode
+    default: false
+    type: boolean
+  target_cidr:
+    description: |
+      CIDR to target for running the VRF.
+    default: ""
+    type: string
+  vrf_name:
+    description: |
+      The name to give to the VRF
+    default: "mgmt"
+    type: string
