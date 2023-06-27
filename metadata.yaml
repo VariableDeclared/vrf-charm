@@ -14,7 +14,6 @@ display-name: Charm Template
 summary: A very short one-line summary of the charm.
 series:
   - jammy
-  - focal
 description: |
   A single sentence that says what the charm is, concisely and memorably.
 
