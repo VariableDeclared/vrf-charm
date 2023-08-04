@@ -3,16 +3,21 @@
 #
 # Learn more at: https://juju.is/docs/sdk
 
+"""Class to handle Netplan configuration."""
 import ipaddress
-import subprocess
 import json
-import yaml
-import pathlib
 import logging
+import pathlib
+import subprocess
+
+import yaml
+
 logger = logging.getLogger(__name__)
 
 
 class NetplanHandler:
+    """Class to handle Netplan configuration."""
+
     def __init__(self, path="/etc/netplan/"):
         self.netplan_configdir = pathlib.Path(path)
         self.configs = list(self.netplan_configdir.iterdir())
@@ -27,7 +32,7 @@ class NetplanHandler:
             return yaml.safe_load(file)
 
     def find_nic(self, target_cidr):
-        """Find the target NIC and gateway in the Netplan configuration."""
+        """Find the target NIC."""
         if not target_cidr:
             return None, None
 
@@ -39,21 +44,29 @@ class NetplanHandler:
         target_nic = None
 
         for interface, nic_def in netplan["network"]["ethernets"].items():
-            if "addresses" in nic_def and ipaddress.IPv4Address(nic_def["addresses"][0].split("/")[0]) in target_mgmt_cidr:
+            if (
+                "addresses" in nic_def
+                and ipaddress.IPv4Address(nic_def["addresses"][0].split("/")[0])
+                in target_mgmt_cidr
+            ):
                 target_nic = interface
                 break
 
         return target_nic
 
     def find_gateway(self):
+        """Find target gateway address."""
         target_gateway = None
-        routes = json.loads(subprocess.check_output(
-            ["ip", "-j", "route", "show", "default"]).decode())
+        routes = json.loads(
+            subprocess.check_output(
+                ["ip", "-j", "route", "show", "default"]).decode()
+        )
         if routes:
             if len(routes) > 1:
                 logger.debug(
-                    "WARNING: More than one route avaiable.\
-                                        Heuristic may fail.")
+                    "WARNING: More than one route available.\
+                                        Heuristic may fail."
+                )
             target_gateway = routes[0]["gateway"]
 
         return target_gateway
@@ -73,7 +86,9 @@ class NetplanHandler:
                     ],
                     "routing-policy": [
                         {
-                            "from": self.netplan["network"]["ethernets"][target_nic]["addresses"][0],
+                            "from": self.netplan["network"]["ethernets"][target_nic]["addresses"][
+                                0
+                            ],
                         }
                     ],
                 }
@@ -88,9 +103,10 @@ class NetplanHandler:
             return
 
         if len(self.configs) > 1:
-            logger.warn(
+            logger.warning(
                 "WARNING: More than one netplan. \
-                Picking the first one and merging")
+                Picking the first one and merging"
+            )
 
         target_netplan = self.configs[0]
         target_netplan.write_text(yaml.safe_dump(self.netplan))
