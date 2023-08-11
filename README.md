@@ -13,7 +13,7 @@ Configuration
 The charm supports the following configuration options:
 * vrf_name: The name of the VRF to create.
 * target_cidr: The CIDR of the target network to associate with the VRF.
-* systemd-units: A comma-separated list of systemd service units to be affected by the VRF.
+* systemd_units: A comma-separated list of systemd service units to be affected by the VRF.
 
 Actions
 

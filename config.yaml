@@ -12,7 +12,7 @@ options:
       Acceptable values are: "info", "debug", "warning", "error" and "critical"
     default: "info"
     type: string
-  systemd-units:
+  systemd_units:
     description: |
       Systemd Units to attempt VRF correction on. Tested on jujud, sshd, snapd.
     default: "[jujud,sshd,snapd]"

@@ -63,7 +63,7 @@ class VrfCharm(ops.CharmBase):
         vrf_name = self.model.config["vrf_name"]
         systemd_dir = pathlib.Path("/etc/systemd/system")
         systemd_units = [
-            element.strip() for element in self.model.config["systemd-units"][1:-1].split(",")
+            element.strip() for element in self.model.config["systemd_units"][1:-1].split(",")
         ]
 
         logger.debug(f"Rewriting this units: {systemd_units}")
@@ -137,7 +137,7 @@ class VrfCharm(ops.CharmBase):
         """Restart SSHD and JujuD units."""
         subprocess.check_call(["sudo", "netplan", "apply"])
         systemd_units = [
-            element.strip() for element in self.model.config["systemd-units"][1:-1].split(",")
+            element.strip() for element in self.model.config["systemd_units"][1:-1].split(",")
         ]
 
         self.unit.status = ops.ActiveStatus()
