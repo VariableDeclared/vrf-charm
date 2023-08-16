@@ -1,24 +1,33 @@
-<!--
-Avoid using this README file for information that is maintained or published elsewhere, e.g.:
+# VrfCharmCharm
 
-* metadata.yaml > published on Charmhub
-* documentation > published on (or linked to from) Charmhub
-* detailed contribution guide > documentation or CONTRIBUTING.md
+VrfCharmCharm is a Juju charm that sets up Virtual Routing and Forwarding (VRF) on Linux-based systems. It allows you to create separate routing tables, providing isolation between network interfaces and services.
 
-Use links instead.
--->
+## Usage
+```
+charmcraft pack
+juju deploy ./vrf-charm_ubuntu-22.04-amd64_ubuntu-20.04-amd64.charm
+```
 
-# vrf-charm
+Configuration
 
-Charmhub package name: operator-template
-More information: https://charmhub.io/vrf-charm
+The charm supports the following configuration options:
+* vrf_name: The name of the VRF to create.
+* target_cidr: The CIDR of the target network to associate with the VRF.
+* systemd_units: A comma-separated list of systemd service units to be affected by the VRF.
 
-Describe your charm in one or two sentences.
+Actions
+
+The charm provides the following action:
+
+* restart-units: This action restarts the specified systemd units affected by the VRF.
+
+To use the action, run:
+
+```
+juju run-action vrf-charm/0 restart-units
+```
 
 ## Other resources
-
-<!-- If your charm is documented somewhere else other than Charmhub, provide a link separately. -->
-
 - [Read more](https://example.com)
 
 - [Contributing](CONTRIBUTING.md) <!-- or link to other contribution documentation -->

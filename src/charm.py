@@ -4,22 +4,16 @@
 #
 # Learn more at: https://juju.is/docs/sdk
 
-"""Charm the service.
-
-Refer to the following post for a quick-start guide that will help you
-develop a new k8s charm using the Operator Framework:
-
-https://discourse.charmhub.io/t/4208
-"""
-
+"""VrfCharm to setup vrf."""
 import logging
+import os
 import pathlib
-import ipaddress
-import subprocess
 import re
-import json 
-import yaml
+import subprocess
+
 import ops
+from charms.operator_libs_linux.v1.systemd import daemon_reload, service_failed, service_reload
+from netplan import NetplanHandler
 
 # Log messages can be retrieved using juju debug-log
 logger = logging.getLogger(__name__)
@@ -27,181 +21,138 @@ logger = logging.getLogger(__name__)
 VALID_LOG_LEVELS = ["info", "debug", "warning", "error", "critical"]
 
 
-class VrfCharmCharm(ops.CharmBase):
-    """Charm the service."""
+class VrfCharm(ops.CharmBase):
+    """VrfCharm to setup vrf."""
 
     def __init__(self, *args):
         super().__init__(*args)
         self.framework.observe(self.on.config_changed, self._on_config_changed)
-        self.framework.observe(self.on.start, self.setup_vrfs)
+        self.framework.observe(self.on.start, self._on_config_changed)
+        self.framework.observe(
+            self.on.restart_services_action, self._on_restart_services_action)
+        self.netplan_handler = NetplanHandler()
+
+    def _on_restart_services_action(self, event):
+        self.restart_units()
 
     def _on_config_changed(self, event: ops.ConfigChangedEvent):
-        """Handle changed configuration.
-
-        Change this example to suit your needs. If you don't need to handle config, you can remove
-        this method.
-
-        Learn more about config at https://juju.is/docs/sdk/config
-        """
-        # Fetch the new config value
+        """Handle changed configuration."""
         log_level = self.model.config["log-level"].lower()
+        if log_level not in VALID_LOG_LEVELS:
+            self.unit.status = ops.ErrorStatus(
+                f"log-level not valid: set log-level to: {VALID_LOG_LEVELS}"
+            )
+            event.defer()
+            return
 
-        # Do some validation of the configuration option
         self.setup_vrfs(event)
 
+    def find_matching_service_file(self, pattern, systemd_dir=pathlib.Path("/etc/systemd/system")):
+        """Given a service name find the full path to it."""
+        matching_files = list(
+            filter(
+                lambda path: path.is_file() and re.match(
+                    pattern, path.name), systemd_dir.iterdir()
+            )
+        )
+        logger.debug(f"Matches for {pattern}: {matching_files}")
+        return matching_files[0] if matching_files else None
 
-    def openfile_and_read(self, path):
-        with open(path, "r") as fh:
-            return fh.read()
+    def rewrite_systemd_service(self):
+        """Rewrite systemd services."""
+        vrf_name = self.model.config["vrf_name"]
+        systemd_dir = pathlib.Path("/etc/systemd/system")
+        systemd_units = [
+            element.strip() for element in self.model.config["systemd_units"][1:-1].split(",")
+        ]
 
-    # TODO: Dynamic unit update 
-    # TODO: Relations?
+        logger.debug(f"Rewriting this units: {systemd_units}")
+
+        def read_file_content(path):
+            with open(path, "r") as fh:
+                return fh.read()
+
+        files_path = []
+        for service in systemd_units:
+            path = self.find_matching_service_file(
+                f"{service}.*.service", systemd_dir)
+            if path is not None:
+                files_path.append(path)
+
+        if not files_path:
+            logger.error(f"ERROR: No units found in {systemd_dir}")
+            return
+
+        for path in files_path:
+            logger.debug(f"Working on {path}")
+            content = read_file_content(path)
+            match = re.search(r"ExecStart=(.+)", content, re.MULTILINE)
+            if match:
+                logger.debug(f"Match found on {path}")
+                override = (
+                    "[Service]\nExecStart=\n"
+                    + f"ExecStart=/bin/ip vrf exec {vrf_name} {match.group(1)}"
+                )
+                logger.debug(f"Creating folder {path}.d/")
+                os.makedirs(f"{path}.d/", exist_ok=True)
+                with open(f"{path}.d/override.conf", "w") as f:
+                    f.write(override)
+
     def setup_vrfs(self, event):
-        netplan = {}
+        """Set up VRF in netplan.
 
-        if self.model.config['debug']:
-            netplan_configdir = pathlib.Path(
-                "/tmp/tests/netplan_configdir"
-            )
-        else:
-            netplan_configdir = pathlib.Path("/etc/netplan")
-        configs = list(netplan_configdir.iterdir())
+        This module provides functions to set up VRF in netplan.
+        """
+        self.netplan_handler.netplan = self.netplan_handler.load_netplan()
 
-        target_netplan = None
-        if len(configs) > 1:
-            print("WARNING: More than one netplan. Picking the first one and merging.")
-        target_netplan = configs[0]
-
-        netplan = yaml.safe_load(self.openfile_and_read(target_netplan))
-        if not self.model.config['target_cidr']:
-            self.model.status = ops.BlockedStatus("Need target CIDR")
+        target_cidr = self.model.config["target_cidr"]
+        if not target_cidr:
+            self.unit.status = ops.BlockedStatus("Setup a target CIDR.")
             event.defer()
             return
 
-        target_mgmt_cidr = ipaddress.IPv4Network(self.model.config['target_cidr'])
-        target_nic = None
-        target_gateway = None
-        vrf_name = self.model.config['vrf_name']
-
-        for interface, nic_def in netplan["network"]["ethernets"].items():
-            if (
-                "addresses" in nic_def
-                and ipaddress.IPv4Address(nic_def["addresses"][0].split("/")[0])
-                in target_mgmt_cidr
-            ):
-                target_nic = interface
-
+        target_nic = self.netplan_handler.find_nic(target_cidr)
         if not target_nic:
-            self.model.status = ops.BlockedStatus("No NIC found in target CIDR.")
+            self.unit.status = ops.ErrorStatus("No NIC found in target CIDR.")
             event.defer()
             return
 
-        routes = json.loads(
-            subprocess.check_output(["ip", "-j", "route", "show", "default"]).decode()
-        )
-        if len(routes) > 1:
-            print("WARNING: More than one route avaiable. Heuristic may fail.")
-        target_gateway = routes[0]["gateway"]
-        vrf = {
-            "vrfs": {
-                vrf_name: {
-                    "table": 21,
-                    "interfaces": [target_nic],
-                    "routes": [
-                        {
-                            "to": "default",
-                            "via": target_gateway,
-                        }
-                    ],
-                    "routing-policy": [
-                        {
-                            "from": netplan["network"]["ethernets"][target_nic][
-                                "addresses"
-                            ][0],
-                        }
-                    ],
-                }
-            }
-        }
+        target_gateway = self.netplan_handler.find_gateway()
 
-        netplan['network'].update(vrf)
+        vrf_name = self.model.config["vrf_name"]
+        vrf_config = self.netplan_handler.generate_vrf_config(
+            target_nic, target_gateway, vrf_name)
 
-        jujud_svcfile = None
-        if self.model.config['debug']:
-            systemd_filecollection = pathlib.Path(
-                "/tmp/tests/systemd_configd"
-            )
-        else:
-            systemd_filecollection = pathlib.Path("/etc/systemd/system")
+        self.netplan_handler.netplan["network"].update(vrf_config)
+        self.netplan_handler.save_netplan()
 
-        # TODO: This whole section should be function calls.
-        jujud_svcfile = list(
-            filter(
-                lambda path: re.match(r"jujud-machine-[0-9]{1,}\.service", path.name),
-                systemd_filecollection.iterdir(),
-            )
-        )[0]
+        self.rewrite_systemd_service()
 
-        sshd_svcfile = list(
-            filter(
-                lambda path: re.match(r"sshd.service", path.name),
-                systemd_filecollection.iterdir(),
-            )
-        )[0]
-        sshd_svcfile_content = self.openfile_and_read(sshd_svcfile)
-        jujud_svcfile_content = self.openfile_and_read(jujud_svcfile)
-
-        m = re.search(
-            r"ExecStart=(?P<binary>/usr/sbin/sshd {1}-D {1}\$SSHD_OPTS)",
-            sshd_svcfile_content,
-            re.MULTILINE,
-        )
-        modified_sshd_svcfile = (
-            sshd_svcfile_content[: m.start()]
-            + f"ExecStart=/bin/ip vrf exec {vrf_name} {m.group('binary')}"
-            + sshd_svcfile_content[m.end() :]
+        self.unit.status = ops.WaitingStatus(
+            "VRFs configured. Units configured, \
+            run restart-units to finish configuration."
         )
 
-        m = re.search(
-            r"ExecStart=(?P<script>/etc/systemd/system/jujud-machine-[0-9]{1,}-exec-start.sh)",
-            jujud_svcfile_content,
-            re.MULTILINE,
-        )
-        if m == None:
-            print(
-                "WARNING: Juju not found, the script is probably running during MAAS setup, not juju setup. Exiting gracefully"
-            )
-            exit(0)
+    def restart_units(self):
+        """Restart SSHD and JujuD units."""
+        subprocess.check_call(["sudo", "netplan", "apply"])
+        systemd_units = [
+            element.strip() for element in self.model.config["systemd_units"][1:-1].split(",")
+        ]
 
-        modified_jujud_svcfile = (
-            jujud_svcfile_content[: m.start()]
-            + f"ExecStart=/bin/ip vrf exec {vrf_name} {m.group('script')}"
-            + jujud_svcfile_content[m.end() :]
-        )
-
-
-        if self.model.config['debug']:
-            open("/tmp/test.svcfile.jujud.service", "w").write(modified_jujud_svcfile)
-            open("/tmp/test.svcfile.sshd.service", "w").write(modified_sshd_svcfile)
-        else:
-            open(sshd_svcfile, "w").write(modified_sshd_svcfile)
-            open(jujud_svcfile, "w").write(modified_jujud_svcfile)
-
-        
-        self.model.status = ops.WaitingStatus("VRFs configured. Units conmfigured, run restart-units to finish configuration.")
-
-    # TODO: Restarting automatically fails to complete, add restart-units action.
-    def restart_units(self, event):
-        subprocess.check_call("sudo systemctl daemon-reload".split())
-        for service in ["sshd", "jujud-\*"]:
-            subprocess.check_call(f"sudo systemctl restart {service}".split())
-
-        if self.model.config['debug']:
-            open("/tmp/test.netplan.yaml", "w").write(yaml.safe_dump(netplan))
-        else:
-            open(target_netplan, "w").write(yaml.safe_dump(netplan))
-            subprocess.check_call(["sudo", "netplan", "apply"])
+        self.unit.status = ops.ActiveStatus()
+        daemon_reload()
+        for service in systemd_units:
+            path = self.find_matching_service_file(f"{service}.*.service")
+            if path is not None:
+                unit = os.path.basename(path)
+                logger.info(f"Restarting: {unit}")
+                service_reload(unit)
+                if service_failed(unit):
+                    logging.error(f"Failed to restart unit: {unit}")
+                    self.unit.status = ops.ErrorStatus(
+                        f"Failed to restart unit: {unit}")
 
 
-if __name__ == "__main__":  # pragma: nocover
-    ops.main(VrfCharmCharm)
+if __name__ == "__main__":
+    ops.main(VrfCharm)
